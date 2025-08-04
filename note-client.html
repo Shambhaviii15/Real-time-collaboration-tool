@@ -1,0 +1,95 @@
+<!-- note-client.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Collaborative Notes</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; }
+    textarea { inline-size: 100%; block-size: 60vh; font-size: 1.1rem; }
+    .cursor {
+      position: absolute;
+      inline-size: 2px; background: red;
+      animation: blink 1s steps(1) infinite;
+      pointer-events: none;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+  </style>
+</head>
+<body>
+  <h1>📝 Collaborative Notes</h1>
+  <textarea id="editor"></textarea>
+
+  <script type="module">
+    import * as Y from "https://cdn.skypack.dev/yjs";
+    import { WebsocketProvider } from "https://cdn.skypack.dev/y-websocket";
+
+    const ydoc = new Y.Doc();
+    const provider = new WebsocketProvider(
+      (location.protocol === "https:" ? "wss:" : "ws:") +
+      "//" + location.host + ":1234",
+      "notes-room",
+      ydoc
+    );
+
+    const ytext = ydoc.getText("shared-text");
+    const textarea = document.getElementById("editor");
+
+    // Bind Yjs text to textarea
+    textarea.value = ytext.toString();
+    textarea.addEventListener("input", () => {
+      ytext.delete(0, ytext.length);
+      ytext.insert(0, textarea.value);
+    });
+
+    // Update UI when CRDT updates
+    ytext.observe(() => {
+      if (textarea.value !== ytext.toString()) {
+        textarea.value = ytext.toString();
+      }
+    });
+
+    provider.on("status", evt => {
+      console.log("WebSocket status:", evt.status); // "connected" / "disconnected"
+    });
+
+    // Awareness: let others know who you are
+    provider.awareness.setLocalStateField("user", {
+      name: prompt("Your name:") || "Anonymous",
+      color: "#" + Math.floor(Math.random()*16777215).toString(16)
+    });
+
+    // Render remote cursors or selections
+    function updateCursors() {
+      document.querySelectorAll(".cursor").forEach(n => n.remove());
+      provider.awareness.getStates().forEach((state, clientId) => {
+        if (clientId === provider.doc.clientID) return;
+        if (state.selection) {
+          const { pos } = state.selection;
+          const rect = textarea.getBoundingClientRect();
+          // approximate position in monospaced textarea
+          const textBefore = textarea.value.slice(0, pos);
+          const lines = textBefore.split("\n");
+          const y = rect.top + (lines.length - 1) * parseFloat(getComputedStyle(textarea).lineHeight);
+          const x = rect.left + lines.at(-1).length * (parseFloat(getComputedStyle(textarea).fontSize) * 0.6);
+          const cursor = document.createElement("div");
+          cursor.className = "cursor";
+          cursor.style.left = x + "px";
+          cursor.style.top = y + "px";
+          cursor.style.height = parseFloat(getComputedStyle(textarea).lineHeight) + "px";
+          cursor.style.backgroundColor = state.user.color;
+          cursor.title = state.user.name;
+          document.body.appendChild(cursor);
+        }
+      });
+    }
+    provider.awareness.on("change", updateCursors);
+
+    textarea.addEventListener("keyup", () => {
+      const pos = textarea.selectionEnd;
+      provider.awareness.setLocalStateField("selection", { pos });
+      updateCursors();
+    });
+  </script>
+</body>
+</html>
